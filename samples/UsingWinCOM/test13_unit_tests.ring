@@ -146,6 +146,18 @@ func testValues
 	check("com_matrix() with variants", roundTrip(com_matrix([[com_null(), com_date("2026-01-02")]])), [["", "2026-01-02"]])
 	checkError("com_matrix() not a list", "com_matrix(5)", "Bad parameter type")
 	checkError("com_matrix() C pointer", 'com_matrix(com_createobject("Scripting.Dictionary"))', "list of rows")
+	check("Typed array VT_I4", roundTrip(com_variant(VT_ARRAY + VT_I4, [1, "2", 3.0])), [1, 2, 3])
+	check("Typed array VT_I4 type", com_lasttype(), VT_ARRAY + VT_I4)
+	check("Typed array VT_BSTR", roundTrip(com_variant(VT_ARRAY + VT_BSTR, ["a", "Привет", 5])), ["a", "Привет", "5"])
+	check("Typed array VT_BSTR type", com_lasttype(), VT_ARRAY + VT_BSTR)
+	check("Typed array VT_R8", roundTrip(com_variant(VT_ARRAY + VT_R8, [1.5, "2.25"])), [1.5, 2.25])
+	check("Typed array VT_BOOL", roundTrip(com_variant(VT_ARRAY + VT_BOOL, [1, 0])), [1, 0])
+	check("Typed array VT_DECIMAL", roundTrip(com_variant(VT_ARRAY + VT_DECIMAL, [12.5])), [12.5])
+	check("Typed array empty", roundTrip(com_variant(VT_ARRAY + VT_I2, [])), [])
+	checkError("Typed array bad item", 'com_variant(VT_ARRAY + VT_I4, ["abc"])', "Type mismatch")
+	checkError("Typed array with a list", "com_variant(VT_ARRAY + VT_I4, [[1]])", "can't contain lists")
+	checkError("Typed array unsupported type", "com_variant(VT_ARRAY + 36, [1])", "not supported")
+	checkError("Typed array out of range", "com_variant(VT_ARRAY + VT_I2, [100000])", "0x8002000A")
 	check("com_version()", com_version(), "1.0.0")
 
 func testPaths
@@ -255,6 +267,10 @@ func testObjects
 	checkError("com_createobject() server: in-process class", 'com_createobject("Scripting.Dictionary", sysget("COMPUTERNAME"))', "0x80040154")
 	checkError("com_createobject() server must be a string", 'com_createobject("Scripting.Dictionary", 5)', "Bad parameter type")
 	checkError("com_createobject() parameters count", 'com_createobject("Scripting.Dictionary", "", "")', "Bad parameters count")
+	oArrayOwner = com_createobject("Scripting.Dictionary")
+	com_set(oArrayOwner, "Item", "k", com_variant(VT_ARRAY + VT_DISPATCH, [oOuter, oOuter]))
+	aObjects = com_get(oArrayOwner, "Item", "k")
+	check("Typed array VT_DISPATCH", com_issame(aObjects[2], oOuter), 1)
 	check("CLSID string", com_typename(com_createobject("{EE09B103-97E0-11CF-978F-00A02463E06F}")), "IDictionary")
 
 func checkRefCountInFunction oOuter, oInner

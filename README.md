@@ -199,6 +199,8 @@ The samples are in `ring/samples/UsingWinCOM`.
 | `test27_excel_and_csv_files.ring` | Create and read Excel workbooks and CSV files using ADO (without Microsoft Excel), and import prices from a workbook into an Access table |
 | `test28_threads.ring` | Using COM objects from many threads (RingThreads) |
 | `test29_wmi_events.ring` | Asynchronous WMI events: know when processes start and stop (`WbemScripting.SWbemSink` and `com_processmessages()`) |
+| `test30_files_in_access.ring` | Store files (binary data) in an Access table, read them using `Field.Value` and `GetChunk()`, and save them using `ADODB.Stream` |
+| `test31_shell_application.ring` | Windows Shell (`Shell.Application`): folder items, the details that Windows Explorer shows, properties and verbs |
 
 The Microsoft Access samples use `accesshelper.ring`. It selects the provider (`Microsoft.ACE.OLEDB.16.0`, `Microsoft.ACE.OLEDB.12.0` or `Microsoft.Jet.OLEDB.4.0`), creates the sample database and the `Products` table, and prints Recordsets as tables. The samples delete the database files at the end. The Office samples keep the files that they create (`products.xlsx`, `products_2d.xlsx`, `products_report.docx` and `products_report.pdf`), and `test26_generate_constants.ring` keeps the generated file (`adoconstants.ring`).
 
@@ -304,7 +306,7 @@ Events from in-process objects (like ADO) happen while we call their methods. Ev
 | `com_currency(nValue)` | Currency (four digits after the decimal point) |
 | `com_double(nValue)` | Double (numbers without fractions are passed as Long by default) |
 | `com_bytes(cData)` | Binary data (byte array) from a Ring string |
-| `com_variant(nVarType, vValue)` | Convert the value to the `VARIANT` type `nVarType` (`VT_I2`, `VT_I4`, `VT_R4`, `VT_R8`, `VT_CY`, `VT_DATE`, `VT_BSTR`, `VT_BOOL`, `VT_DECIMAL`, ...). Strings are converted using the invariant locale (the decimal separator is `.`). For `VT_ERROR` the value is a 32-bit error code, signed or unsigned (like `com_lasthresult()`) |
+| `com_variant(nVarType, vValue)` | Convert the value to the `VARIANT` type `nVarType` (`VT_I2`, `VT_I4`, `VT_R4`, `VT_R8`, `VT_CY`, `VT_DATE`, `VT_BSTR`, `VT_BOOL`, `VT_DECIMAL`, ...). Strings are converted using the invariant locale (the decimal separator is `.`). For `VT_ERROR` the value is a 32-bit error code, signed or unsigned (like `com_lasthresult()`). For typed arrays use `VT_ARRAY + nType` with a list: `com_variant(VT_ARRAY + VT_BSTR, ["a", "b"])` (each item is converted to the type) |
 | `com_lasttype()` | Return the `VARIANT` type of the last value returned by `com_get()`, `com_invoke()` or `com_dispatch()` |
 | `com_wasnull()` | Return `1` if the last value was Null |
 | `com_lasthresult()` | Return the `HRESULT` code of the last call (`0` is `S_OK`), as an unsigned number (`upper(hex(com_lasthresult()))` gives `"80040E14"`) |
