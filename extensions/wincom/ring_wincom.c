@@ -1994,6 +1994,68 @@ RING_FUNC(ring_com_release) {
 	}
 }
 
+/*
+**  Create a one dimension array of nBaseType (like VT_BSTR or VT_I4) from the items of a Ring list
+**  Each item is converted to nBaseType (Strings using the invariant locale)
+**  Returns E_INVALIDARG (with cWinCOMError) if the type or an item is not supported
+*/
+static HRESULT wincom_listtotypedarray(List *pList, VARTYPE nBaseType, VARIANT *pVar) {
+	SAFEARRAY *pArray;
+	VARIANT vItem, vConverted;
+	DECIMAL vDecimal;
+	LONG nIndex;
+	unsigned int x, nSize;
+	HRESULT hr;
+	VariantInit(pVar);
+	if (!wincom_issimpletype(nBaseType) && (nBaseType != VT_DECIMAL)) {
+		wincom_seterrortext("Error, WinCOM: The array type is not supported");
+		return E_INVALIDARG;
+	}
+	nSize = ring_list_getsize(pList);
+	pArray = SafeArrayCreateVector(nBaseType, 0, nSize);
+	if (pArray == NULL) {
+		return E_OUTOFMEMORY;
+	}
+	for (x = 1; x <= nSize; x++) {
+		if (ring_list_islist(pList, x) && !ring_list_iscpointerlist(ring_list_getlist(pList, x))) {
+			SafeArrayDestroy(pArray);
+			wincom_seterrortext("Error, WinCOM: Typed arrays can't contain lists (use VT_ARRAY + VT_VARIANT)");
+			return E_INVALIDARG;
+		}
+		if (!wincom_itemtovariant(pList, x, &vItem, 1)) {
+			SafeArrayDestroy(pArray);
+			return E_INVALIDARG;
+		}
+		VariantInit(&vConverted);
+		hr = VariantChangeTypeEx(&vConverted, &vItem, LOCALE_INVARIANT, 0, nBaseType);
+		VariantClear(&vItem);
+		if (FAILED(hr)) {
+			SafeArrayDestroy(pArray);
+			return hr;
+		}
+		nIndex = (LONG)x - 1;
+		/* SafeArrayPutElement() copies the data (BSTR, objects) */
+		if ((nBaseType == VT_BSTR) || (nBaseType == VT_DISPATCH) || (nBaseType == VT_UNKNOWN)) {
+			hr = SafeArrayPutElement(pArray, &nIndex, V_BYREF(&vConverted));
+		} else if (nBaseType == VT_DECIMAL) {
+			/* DECIMAL uses the VARIANT type field (wReserved) */
+			vDecimal = V_DECIMAL(&vConverted);
+			vDecimal.wReserved = 0;
+			hr = SafeArrayPutElement(pArray, &nIndex, &vDecimal);
+		} else {
+			hr = SafeArrayPutElement(pArray, &nIndex, &V_UI1(&vConverted));
+		}
+		VariantClear(&vConverted);
+		if (FAILED(hr)) {
+			SafeArrayDestroy(pArray);
+			return hr;
+		}
+	}
+	V_VT(pVar) = (VARTYPE)(VT_ARRAY | nBaseType);
+	V_ARRAY(pVar) = pArray;
+	return S_OK;
+}
+
 /* com_variant(nVarType, vValue) --> VARIANT (C pointer) that can be passed to COM methods */
 RING_FUNC(ring_com_variant) {
 	VARIANT *pVar;
@@ -2054,6 +2116,22 @@ RING_FUNC(ring_com_variant) {
 		}
 		V_VT(pVar) = VT_ARRAY | VT_UI1;
 		V_ARRAY(pVar) = pArray;
+	} else if ((nType & VT_ARRAY) && ((nType & VT_TYPEMASK) != VT_VARIANT) && RING_API_ISLIST(2) &&
+		   !ring_list_iscpointerlist(RING_API_GETLIST(2))) {
+		/* Typed array (like VT_ARRAY + VT_BSTR) from a list of values */
+		hr = wincom_listtotypedarray(RING_API_GETLIST(2), (VARTYPE)(nType & VT_TYPEMASK), pVar);
+		if (FAILED(hr) && (hr != E_INVALIDARG)) {
+			VariantClear(pVar);
+			free(pVar);
+			wincom_seterror("com_variant()", hr, NULL);
+			RING_API_ERROR(cWinCOMError);
+			return;
+		}
+		if (hr == E_INVALIDARG) {
+			free(pVar);
+			RING_API_ERROR(cWinCOMError);
+			return;
+		}
 	} else if ((nType == VT_DATE) && RING_API_ISSTRING(2) && wincom_stringtodate(RING_API_GETSTRING(2), &dDate)) {
 		V_VT(pVar) = VT_DATE;
 		V_DATE(pVar) = dDate;
