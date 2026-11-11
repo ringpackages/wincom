@@ -5,11 +5,11 @@ aPackageInfo = [
 	:developer = "Mahmoud Fayed",
 	:email = "msfclipper@yahoo.com",
 	:license = "MIT License",
-	:version = "1.0.2",
+	:version = "1.0.3",
 	:ringversion = "1.27",
 	:versions = 	[
 		[
-			:version = "1.0.2",
+			:version = "1.0.3",
 			:branch = "master"
 		]
 	],
@@ -61,6 +61,8 @@ aPackageInfo = [
 		"samples/UsingWinCOM/test27_excel_and_csv_files.ring",
 		"samples/UsingWinCOM/test28_threads.ring",
 		"samples/UsingWinCOM/test29_wmi_events.ring",
+		"samples/UsingWinCOM/test30_files_in_access.ring",
+		"samples/UsingWinCOM/test31_shell_application.ring",
 		"tools/ring2exe/libs/wincom.ring"
 	],
 	:windowsfiles = 	[
