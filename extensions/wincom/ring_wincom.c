@@ -81,10 +81,21 @@ typedef struct WinCOMNamed {
 	VARIANT vValue;
 } WinCOMNamed;
 
-/* Argument passed to a member: the value and the name (NULL for positional arguments) */
+/*
+**  ByRef argument (created by com_byref())
+**  The holder is reference counted: a call that passes it keeps it alive (even if com_release() is used
+**  by an event handler during the call)
+*/
+typedef struct WinCOMByRef {
+	LONG nRefCount;
+	VARIANT vValue;
+} WinCOMByRef;
+
+/* Argument passed to a member: the value, the name (NULL for positional arguments) and the ByRef holder */
 typedef struct WinCOMArg {
 	VARIANT vValue;
 	BSTR cName;
+	WinCOMByRef *pByRef;
 } WinCOMArg;
 
 /* State of each thread (Each thread has its own COM apartment) */
@@ -94,17 +105,31 @@ static WINCOM_TLS VARTYPE nWinCOMLastType = VT_EMPTY;
 static WINCOM_TLS unsigned long nWinCOMLastHResult = 0;
 static WINCOM_TLS char cWinCOMError[WINCOM_ERRORSIZE];
 
-/* The first error raised by an event handler (Raised again by the function that caused the event) */
+/*
+**  The first error raised by an event handler (Raised again by the com_*() function that caused the event)
+**  nWinCOMCallDepth is the number of active com_*() calls that can cause events
+**  Events that happen outside these calls (like in the event loop of a GUI library) print their errors
+*/
 static WINCOM_TLS int lWinCOMEventError = 0;
 static WINCOM_TLS char cWinCOMEventError[WINCOM_ERRORSIZE];
+static WINCOM_TLS int nWinCOMCallDepth = 0;
 
 static char *wincom_strdup(const char *cStr);
 static void wincom_callandreturn(void *pPointer, IDispatch *pDispatch, const char *cPath, int nMode,
 				 struct WinCOMArg *aArgs, int nArgs);
 
-/* Raise the error of an event handler (if any), returns 1 if an error was raised */
-static int wincom_raiseeventerror(void *pPointer) {
+/* Start a call that can cause events */
+static void wincom_begincall(void) { nWinCOMCallDepth++; }
+
+/*
+**  End a call that can cause events: raise the error of an event handler (if any)
+**  Returns 1 if an error was raised
+*/
+static int wincom_endcall(void *pPointer) {
 	char cMessage[WINCOM_ERRORSIZE];
+	if (nWinCOMCallDepth > 0) {
+		nWinCOMCallDepth--;
+	}
 	if (!lWinCOMEventError) {
 		return 0;
 	}
@@ -148,6 +173,18 @@ static void wincom_freevariant(void *pState, void *pPtr) {
 		VariantClear((VARIANT *)pPtr);
 		free(pPtr);
 	}
+}
+
+static void wincom_releasebyref(WinCOMByRef *pByRef) {
+	if ((pByRef != NULL) && (InterlockedDecrement(&pByRef->nRefCount) == 0)) {
+		VariantClear(&pByRef->vValue);
+		free(pByRef);
+	}
+}
+
+static void wincom_freebyref(void *pState, void *pPtr) {
+	(void)pState;
+	wincom_releasebyref((WinCOMByRef *)pPtr);
 }
 
 static void wincom_freenamed(void *pState, void *pPtr) {
@@ -440,23 +477,13 @@ static int wincom_listtovariant(List *pList, VARIANT *pVar, int nDepth) {
 			}
 			return 1;
 		}
-		if (strcmp(cType, WINCOM_VARIANT) == 0) {
+		if ((strcmp(cType, WINCOM_VARIANT) == 0) || (strcmp(cType, WINCOM_BYREF) == 0)) {
+			/* COMVariant: copy of the VARIANT, COMByRef: inside lists (arrays) the value is copied */
 			if (pPtr == NULL) {
 				return 1;
 			}
-			hr = VariantCopy(pVar, (VARIANT *)pPtr);
-			if (FAILED(hr)) {
-				wincom_seterror("", hr, NULL);
-				return 0;
-			}
-			return 1;
-		}
-		if (strcmp(cType, WINCOM_BYREF) == 0) {
-			/* Inside lists (arrays) the value is copied */
-			if (pPtr == NULL) {
-				return 1;
-			}
-			hr = VariantCopy(pVar, (VARIANT *)pPtr);
+			hr = VariantCopy(pVar, (strcmp(cType, WINCOM_BYREF) == 0) ? &((WinCOMByRef *)pPtr)->vValue
+										  : (VARIANT *)pPtr);
 			if (FAILED(hr)) {
 				wincom_seterror("", hr, NULL);
 				return 0;
@@ -554,15 +581,19 @@ static void *wincom_getlistpointer(List *pList, const char *cType) {
 **  COMNamed (com_named()) --> Named argument
 */
 static int wincom_listtoarg(List *pList, WinCOMArg *pArg) {
-	VARIANT *pHolder;
+	WinCOMByRef *pByRef;
 	WinCOMNamed *pNamed;
 	HRESULT hr;
 	VariantInit(&pArg->vValue);
 	pArg->cName = NULL;
-	pHolder = (VARIANT *)wincom_getlistpointer(pList, WINCOM_BYREF);
-	if (pHolder != NULL) {
+	pArg->pByRef = NULL;
+	pByRef = (WinCOMByRef *)wincom_getlistpointer(pList, WINCOM_BYREF);
+	if (pByRef != NULL) {
+		/* The argument keeps the holder alive until the call ends */
+		InterlockedIncrement(&pByRef->nRefCount);
+		pArg->pByRef = pByRef;
 		V_VT(&pArg->vValue) = VT_BYREF | VT_VARIANT;
-		V_VARIANTREF(&pArg->vValue) = pHolder;
+		V_VARIANTREF(&pArg->vValue) = &pByRef->vValue;
 		return 1;
 	}
 	pNamed = (WinCOMNamed *)wincom_getlistpointer(pList, WINCOM_NAMED);
@@ -592,6 +623,7 @@ static int wincom_listtoarg(List *pList, WinCOMArg *pArg) {
 /* Convert the Ring parameter (nPara) to an argument */
 static int wincom_paratoarg(void *pPointer, int nPara, WinCOMArg *pArg) {
 	pArg->cName = NULL;
+	pArg->pByRef = NULL;
 	if (RING_API_ISLIST(nPara)) {
 		return wincom_listtoarg(RING_API_GETLIST(nPara), pArg);
 	}
@@ -601,6 +633,7 @@ static int wincom_paratoarg(void *pPointer, int nPara, WinCOMArg *pArg) {
 /* Convert the item (nIndex) of a Ring list to an argument */
 static int wincom_itemtoarg(List *pList, unsigned int nIndex, WinCOMArg *pArg) {
 	pArg->cName = NULL;
+	pArg->pByRef = NULL;
 	if (ring_list_islist(pList, nIndex)) {
 		return wincom_listtoarg(ring_list_getlist(pList, nIndex), pArg);
 	}
@@ -1217,9 +1250,11 @@ static void wincom_skipspaces(const char **pPath) {
 **  The arguments are numbers or strings: 'Fields("Name")', "Item(1)", "Cells(2, 3)"
 **  Returns 1 on success, *pLast is 1 if this is the last part
 */
+static void wincom_clearpathargs(VARIANT *aPathArgs, int nPathArgs);
+
 static int wincom_parsepart(const char **pPath, char *cName, VARIANT *aArgs, int *pArgs, int *pLast) {
 	const char *cStr;
-	int nLen, x;
+	int nLen;
 	cStr = *pPath;
 	*pArgs = 0;
 	*pLast = 0;
@@ -1241,9 +1276,7 @@ static int wincom_parsepart(const char **pPath, char *cName, VARIANT *aArgs, int
 			while (1) {
 				wincom_skipspaces(&cStr);
 				if ((*pArgs >= WINCOM_MAXPATHARGS) || !wincom_parseliteral(&cStr, &aArgs[*pArgs])) {
-					for (x = 0; x < *pArgs; x++) {
-						VariantClear(&aArgs[x]);
-					}
+					wincom_clearpathargs(aArgs, *pArgs);
 					*pArgs = 0;
 					return 0;
 				}
@@ -1257,9 +1290,7 @@ static int wincom_parsepart(const char **pPath, char *cName, VARIANT *aArgs, int
 			}
 		}
 		if (*cStr != ')') {
-			for (x = 0; x < *pArgs; x++) {
-				VariantClear(&aArgs[x]);
-			}
+			wincom_clearpathargs(aArgs, *pArgs);
 			*pArgs = 0;
 			return 0;
 		}
@@ -1268,12 +1299,17 @@ static int wincom_parsepart(const char **pPath, char *cName, VARIANT *aArgs, int
 	}
 	if (*cStr == '.') {
 		cStr++;
+		/* A path can't end with a dot ("Fields.") */
+		wincom_skipspaces(&cStr);
+		if (*cStr == '\0') {
+			wincom_clearpathargs(aArgs, *pArgs);
+			*pArgs = 0;
+			return 0;
+		}
 	} else if (*cStr == '\0') {
 		*pLast = 1;
 	} else {
-		for (x = 0; x < *pArgs; x++) {
-			VariantClear(&aArgs[x]);
-		}
+		wincom_clearpathargs(aArgs, *pArgs);
 		*pArgs = 0;
 		return 0;
 	}
@@ -1291,11 +1327,12 @@ static void wincom_cleararguments(WinCOMArg *aArgs, int nArgs) {
 		return;
 	}
 	for (x = 0; x < nArgs; x++) {
-		/* VariantClear() doesn't free the value of VT_BYREF arguments (It's owned by com_byref()) */
+		/* VariantClear() doesn't free the value of VT_BYREF arguments (It's owned by the com_byref() holder) */
 		VariantClear(&aArgs[x].vValue);
 		if (aArgs[x].cName != NULL) {
 			SysFreeString(aArgs[x].cName);
 		}
+		wincom_releasebyref(aArgs[x].pByRef);
 	}
 	free(aArgs);
 }
@@ -1321,6 +1358,21 @@ static void wincom_clearpathargs(VARIANT *aPathArgs, int nPathArgs) {
 	for (x = 0; x < nPathArgs; x++) {
 		VariantClear(&aPathArgs[x]);
 	}
+}
+
+/*
+**  Check if a property put failed because the property doesn't accept the value using DISPATCH_PROPERTYPUT
+**  (Then com_set() tries DISPATCH_PROPERTYPUTREF), the error code can be in EXCEPINFO (DISP_E_EXCEPTION)
+*/
+static int wincom_isputerror(HRESULT hr, EXCEPINFO *pExcepInfo) {
+	if (hr == DISP_E_EXCEPTION) {
+		if (pExcepInfo->pfnDeferredFillIn != NULL) {
+			pExcepInfo->pfnDeferredFillIn(pExcepInfo);
+			pExcepInfo->pfnDeferredFillIn = NULL;
+		}
+		hr = pExcepInfo->scode;
+	}
+	return (hr == DISP_E_MEMBERNOTFOUND) || (hr == DISP_E_BADPARAMCOUNT) || (hr == DISP_E_TYPEMISMATCH);
 }
 
 /* Check the order of the arguments: the named arguments must be after the positional arguments */
@@ -1383,6 +1435,7 @@ static int wincom_callpath(IDispatch *pDispatch, const char *cPath, int nMode, W
 			for (x = 0; x < nPathArgs; x++) {
 				aPathItems[x].vValue = aPathArgs[x];
 				aPathItems[x].cName = NULL;
+				aPathItems[x].pByRef = NULL;
 			}
 			hr = wincom_invokemember(pCurrent, cName, DISPATCH_PROPERTYGET | DISPATCH_METHOD, aPathItems,
 						 nPathArgs, &vResult, &vExcepInfo);
@@ -1426,6 +1479,7 @@ static int wincom_callpath(IDispatch *pDispatch, const char *cPath, int nMode, W
 			for (x = 0; x < nPathArgs; x++) {
 				aAll[x].vValue = aPathArgs[x];
 				aAll[x].cName = NULL;
+				aAll[x].pByRef = NULL;
 			}
 			for (x = 0; x < nExtra; x++) {
 				aAll[nPathArgs + x] = aExtra[x];
@@ -1446,7 +1500,9 @@ static int wincom_callpath(IDispatch *pDispatch, const char *cPath, int nMode, W
 			nFlags = DISPATCH_METHOD | DISPATCH_PROPERTYGET;
 		}
 		if ((nMode == WINCOM_MODE_SET) || (nMode == WINCOM_MODE_SETREF)) {
-			if (nAll == 0) {
+			/* The value is the last argument after the path (not an argument written in the path) */
+			if (nAll == nPathArgs) {
+				wincom_cleararguments(aAll, nAll);
 				IDispatch_Release(pCurrent);
 				wincom_seterrortext("Error, WinCOM: The value is missing");
 				return 0;
@@ -1454,9 +1510,11 @@ static int wincom_callpath(IDispatch *pDispatch, const char *cPath, int nMode, W
 			hr = wincom_invokemember(pCurrent, cName, nFlags, aAll, nAll, NULL, &vExcepInfo);
 			lValueIsObject = (V_VT(&aAll[nAll - 1].vValue) == VT_DISPATCH) ||
 					 (V_VT(&aAll[nAll - 1].vValue) == VT_UNKNOWN);
-			if ((nMode == WINCOM_MODE_SET) && lValueIsObject && FAILED(hr)) {
+			if ((nMode == WINCOM_MODE_SET) && lValueIsObject && wincom_isputerror(hr, &vExcepInfo)) {
 				/*
 				**  Like (Set x.Property = Object) in Visual Basic
+				**  Only when the property doesn't accept the object using DISPATCH_PROPERTYPUT
+				**  (Errors raised by the property itself are not retried, so the property runs one time)
 				**  If the property doesn't support DISPATCH_PROPERTYPUTREF we keep the first error
 				*/
 				memset(&vExcepInfo2, 0, sizeof(EXCEPINFO));
@@ -1589,9 +1647,10 @@ static void wincom_callandreturn(void *pPointer, IDispatch *pDispatch, const cha
 		RING_API_ERROR(WINCOM_ERROR_OOM);
 		return;
 	}
+	wincom_begincall();
 	lDone = wincom_callpath(pDispatch, cPathCopy, nMode, aArgs, nArgs, &vResult);
 	free(cPathCopy);
-	if (wincom_raiseeventerror(pPointer)) {
+	if (wincom_endcall(pPointer)) {
 		VariantClear(&vResult);
 		return;
 	}
@@ -1628,21 +1687,40 @@ static HRESULT wincom_getclsid(const char *cName, int nSize, CLSID *pCLSID) {
 	return hr;
 }
 
+/* Check that the function has one string parameter, then initialize COM (returns 0 after raising an error) */
+static int wincom_checkstringparameter(void *pPointer) {
+	if (RING_API_PARACOUNT != 1) {
+		RING_API_ERROR(RING_API_MISS1PARA);
+		return 0;
+	}
+	if (!RING_API_ISSTRING(1)) {
+		RING_API_ERROR(RING_API_BADPARATYPE);
+		return 0;
+	}
+	if (!wincom_init()) {
+		RING_API_ERROR(WINCOM_ERROR_INIT);
+		return 0;
+	}
+	return 1;
+}
+
+/* Return the COM object, or raise the error (cName is the ProgID or the moniker) */
+static void wincom_returnobject(void *pPointer, IDispatch *pDispatch, HRESULT hr, const char *cName) {
+	nWinCOMLastHResult = (unsigned long)hr;
+	if (FAILED(hr)) {
+		wincom_seterror(cName, hr, NULL);
+		RING_API_ERROR(cWinCOMError);
+		return;
+	}
+	RING_API_RETMANAGEDCPOINTER(pDispatch, WINCOM_OBJECT, wincom_freeobject);
+}
+
 /* com_createobject(cProgID) --> COM object */
 RING_FUNC(ring_com_createobject) {
 	CLSID vCLSID;
 	IDispatch *pDispatch;
 	HRESULT hr;
-	if (RING_API_PARACOUNT != 1) {
-		RING_API_ERROR(RING_API_MISS1PARA);
-		return;
-	}
-	if (!RING_API_ISSTRING(1)) {
-		RING_API_ERROR(RING_API_BADPARATYPE);
-		return;
-	}
-	if (!wincom_init()) {
-		RING_API_ERROR(WINCOM_ERROR_INIT);
+	if (!wincom_checkstringparameter(pPointer)) {
 		return;
 	}
 	pDispatch = NULL;
@@ -1651,13 +1729,7 @@ RING_FUNC(ring_com_createobject) {
 		hr = CoCreateInstance(&vCLSID, NULL, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER, &IID_IDispatch,
 				      (void **)&pDispatch);
 	}
-	nWinCOMLastHResult = (unsigned long)hr;
-	if (FAILED(hr)) {
-		wincom_seterror(RING_API_GETSTRING(1), hr, NULL);
-		RING_API_ERROR(cWinCOMError);
-		return;
-	}
-	RING_API_RETMANAGEDCPOINTER(pDispatch, WINCOM_OBJECT, wincom_freeobject);
+	wincom_returnobject(pPointer, pDispatch, hr, RING_API_GETSTRING(1));
 }
 
 /* com_getobject(cName) --> COM object (Using a moniker: "winmgmts:", file name, ...) */
@@ -1665,16 +1737,7 @@ RING_FUNC(ring_com_getobject) {
 	BSTR cWide;
 	IDispatch *pDispatch;
 	HRESULT hr;
-	if (RING_API_PARACOUNT != 1) {
-		RING_API_ERROR(RING_API_MISS1PARA);
-		return;
-	}
-	if (!RING_API_ISSTRING(1)) {
-		RING_API_ERROR(RING_API_BADPARATYPE);
-		return;
-	}
-	if (!wincom_init()) {
-		RING_API_ERROR(WINCOM_ERROR_INIT);
+	if (!wincom_checkstringparameter(pPointer)) {
 		return;
 	}
 	cWide = wincom_tobstr(RING_API_GETSTRING(1), RING_API_GETSTRINGSIZE(1));
@@ -1682,15 +1745,10 @@ RING_FUNC(ring_com_getobject) {
 		RING_API_ERROR(WINCOM_ERROR_OOM);
 		return;
 	}
+	pDispatch = NULL;
 	hr = CoGetObject(cWide, NULL, &IID_IDispatch, (void **)&pDispatch);
 	SysFreeString(cWide);
-	nWinCOMLastHResult = (unsigned long)hr;
-	if (FAILED(hr)) {
-		wincom_seterror(RING_API_GETSTRING(1), hr, NULL);
-		RING_API_ERROR(cWinCOMError);
-		return;
-	}
-	RING_API_RETMANAGEDCPOINTER(pDispatch, WINCOM_OBJECT, wincom_freeobject);
+	wincom_returnobject(pPointer, pDispatch, hr, RING_API_GETSTRING(1));
 }
 
 /* com_getactiveobject(cProgID) --> COM object (The running instance, like Excel.Application) */
@@ -1699,16 +1757,7 @@ RING_FUNC(ring_com_getactiveobject) {
 	IUnknown *pUnknown;
 	IDispatch *pDispatch;
 	HRESULT hr;
-	if (RING_API_PARACOUNT != 1) {
-		RING_API_ERROR(RING_API_MISS1PARA);
-		return;
-	}
-	if (!RING_API_ISSTRING(1)) {
-		RING_API_ERROR(RING_API_BADPARATYPE);
-		return;
-	}
-	if (!wincom_init()) {
-		RING_API_ERROR(WINCOM_ERROR_INIT);
+	if (!wincom_checkstringparameter(pPointer)) {
 		return;
 	}
 	pDispatch = NULL;
@@ -1720,28 +1769,13 @@ RING_FUNC(ring_com_getactiveobject) {
 			IUnknown_Release(pUnknown);
 		}
 	}
-	nWinCOMLastHResult = (unsigned long)hr;
-	if (FAILED(hr)) {
-		wincom_seterror(RING_API_GETSTRING(1), hr, NULL);
-		RING_API_ERROR(cWinCOMError);
-		return;
-	}
-	RING_API_RETMANAGEDCPOINTER(pDispatch, WINCOM_OBJECT, wincom_freeobject);
+	wincom_returnobject(pPointer, pDispatch, hr, RING_API_GETSTRING(1));
 }
 
 /* com_progidexists(cProgID) --> 1 if the ProgID (or CLSID) is registered */
 RING_FUNC(ring_com_progidexists) {
 	CLSID vCLSID;
-	if (RING_API_PARACOUNT != 1) {
-		RING_API_ERROR(RING_API_MISS1PARA);
-		return;
-	}
-	if (!RING_API_ISSTRING(1)) {
-		RING_API_ERROR(RING_API_BADPARATYPE);
-		return;
-	}
-	if (!wincom_init()) {
-		RING_API_ERROR(WINCOM_ERROR_INIT);
+	if (!wincom_checkstringparameter(pPointer)) {
 		return;
 	}
 	RING_API_RETNUMBER(SUCCEEDED(wincom_getclsid(RING_API_GETSTRING(1), RING_API_GETSTRINGSIZE(1), &vCLSID)) ? 1
@@ -1808,11 +1842,15 @@ RING_FUNC(ring_com_items) {
 		return;
 	}
 	memset(&vExcepInfo, 0, sizeof(EXCEPINFO));
+	wincom_begincall();
 	hr = wincom_invokemember(pDispatch, "_NewEnum", DISPATCH_METHOD | DISPATCH_PROPERTYGET, NULL, 0, &vResult,
 				 &vExcepInfo);
 	if (FAILED(hr)) {
 		wincom_seterror("_NewEnum", hr, &vExcepInfo);
 		wincom_clearexcepinfo(&vExcepInfo);
+		if (wincom_endcall(pPointer)) {
+			return;
+		}
 		RING_API_ERROR(cWinCOMError);
 		return;
 	}
@@ -1825,6 +1863,9 @@ RING_FUNC(ring_com_items) {
 	VariantClear(&vResult);
 	if (FAILED(hr)) {
 		wincom_seterror("_NewEnum", hr, NULL);
+		if (wincom_endcall(pPointer)) {
+			return;
+		}
 		RING_API_ERROR(cWinCOMError);
 		return;
 	}
@@ -1841,6 +1882,9 @@ RING_FUNC(ring_com_items) {
 		VariantClear(&vItem);
 	}
 	IEnumVARIANT_Release(pEnum);
+	if (wincom_endcall(pPointer)) {
+		return;
+	}
 	RING_API_RETLISTBYREF(pList);
 }
 
@@ -1890,8 +1934,11 @@ RING_FUNC(ring_com_release) {
 	pPtr = pItem->data.pPointer;
 	if (pPtr != NULL) {
 		pItem->data.pPointer = NULL;
-		if ((strcmp(cType, WINCOM_VARIANT) == 0) || (strcmp(cType, WINCOM_BYREF) == 0)) {
+		wincom_begincall();
+		if (strcmp(cType, WINCOM_VARIANT) == 0) {
 			wincom_freevariant(NULL, pPtr);
+		} else if (strcmp(cType, WINCOM_BYREF) == 0) {
+			wincom_freebyref(NULL, pPtr);
 		} else if (strcmp(cType, WINCOM_NAMED) == 0) {
 			wincom_freenamed(NULL, pPtr);
 		} else if (strcmp(cType, WINCOM_EVENTS) == 0) {
@@ -1899,6 +1946,7 @@ RING_FUNC(ring_com_release) {
 		} else {
 			wincom_freeobject(NULL, pPtr);
 		}
+		wincom_endcall(pPointer);
 	}
 }
 
@@ -1934,8 +1982,16 @@ RING_FUNC(ring_com_variant) {
 	} else if (nType == VT_ERROR) {
 		/* Missing optional parameter (or other error code) */
 		V_VT(pVar) = VT_ERROR;
-		V_ERROR(pVar) = RING_API_ISNUMBER(2) && (RING_API_GETNUMBER(2) != 0) ? (SCODE)(long)RING_API_GETNUMBER(2)
-										   : DISP_E_PARAMNOTFOUND;
+		V_ERROR(pVar) = DISP_E_PARAMNOTFOUND;
+		if (RING_API_ISNUMBER(2) && (RING_API_GETNUMBER(2) != 0)) {
+			/* Signed (-2147352572) or unsigned (2147614724, like com_lasthresult()) 32-bit values */
+			if ((RING_API_GETNUMBER(2) < -2147483648.0) || (RING_API_GETNUMBER(2) > 4294967295.0)) {
+				free(pVar);
+				RING_API_ERROR("Error, WinCOM: The error code must be a 32-bit number");
+				return;
+			}
+			V_ERROR(pVar) = (SCODE)(ULONG)(LONGLONG)RING_API_GETNUMBER(2);
+		}
 	} else if ((nType == (VT_ARRAY | VT_UI1)) && RING_API_ISSTRING(2)) {
 		/* Binary data */
 		cStr = RING_API_GETSTRING(2);
@@ -2285,40 +2341,41 @@ RING_FUNC(ring_com_refcount) {
 
 /* com_byref(vValue) --> Argument passed by reference (The member can change the value, read it using com_byrefvalue()) */
 RING_FUNC(ring_com_byref) {
-	VARIANT *pHolder;
+	WinCOMByRef *pByRef;
 	if (RING_API_PARACOUNT != 1) {
 		RING_API_ERROR(RING_API_MISS1PARA);
 		return;
 	}
-	pHolder = (VARIANT *)malloc(sizeof(VARIANT));
-	if (pHolder == NULL) {
+	pByRef = (WinCOMByRef *)malloc(sizeof(WinCOMByRef));
+	if (pByRef == NULL) {
 		RING_API_ERROR(WINCOM_ERROR_OOM);
 		return;
 	}
-	if (!wincom_paratovariant(pPointer, 1, pHolder)) {
-		free(pHolder);
+	pByRef->nRefCount = 1;
+	if (!wincom_paratovariant(pPointer, 1, &pByRef->vValue)) {
+		free(pByRef);
 		RING_API_ERROR(cWinCOMError);
 		return;
 	}
-	RING_API_RETMANAGEDCPOINTER(pHolder, WINCOM_BYREF, wincom_freevariant);
+	RING_API_RETMANAGEDCPOINTER(pByRef, WINCOM_BYREF, wincom_freebyref);
 }
 
 /* com_byrefvalue(oByRef) --> The value of the argument (after calling the member) */
 RING_FUNC(ring_com_byrefvalue) {
-	VARIANT *pHolder;
+	WinCOMByRef *pByRef;
 	VARIANT vCopy;
 	HRESULT hr;
 	if (RING_API_PARACOUNT != 1) {
 		RING_API_ERROR(RING_API_MISS1PARA);
 		return;
 	}
-	pHolder = RING_API_ISLIST(1) ? (VARIANT *)wincom_getlistpointer(RING_API_GETLIST(1), WINCOM_BYREF) : NULL;
-	if (pHolder == NULL) {
+	pByRef = RING_API_ISLIST(1) ? (WinCOMByRef *)wincom_getlistpointer(RING_API_GETLIST(1), WINCOM_BYREF) : NULL;
+	if (pByRef == NULL) {
 		RING_API_ERROR("Error, WinCOM: The parameter must be created by com_byref()");
 		return;
 	}
 	VariantInit(&vCopy);
-	hr = VariantCopy(&vCopy, pHolder);
+	hr = VariantCopy(&vCopy, &pByRef->vValue);
 	if (FAILED(hr)) {
 		wincom_seterror("com_byrefvalue()", hr, NULL);
 		RING_API_ERROR(cWinCOMError);
@@ -2956,6 +3013,13 @@ RING_FUNC(ring_wincom_seteventerror) {
 	if ((RING_API_PARACOUNT != 1) || !RING_API_ISSTRING(1)) {
 		return;
 	}
+	if (nWinCOMCallDepth == 0) {
+		/* The event didn't happen during a com_*() call (Like events in the event loop of a GUI library) */
+		printf("\nError, WinCOM: Event %s : %s\n", pWinCOMEvent != NULL ? pWinCOMEvent->cName : "",
+		       RING_API_GETSTRING(1));
+		fflush(stdout);
+		return;
+	}
 	if (lWinCOMEventError) {
 		return;
 	}
@@ -3214,11 +3278,15 @@ RING_FUNC(ring_com_processmessages) {
 	nWait = (DWORD)nMilliseconds;
 	nCount = 0;
 	nStart = GetTickCount();
+	wincom_begincall();
 	while (1) {
 		while (PeekMessageW(&vMessage, NULL, 0, 0, PM_REMOVE)) {
 			if (vMessage.message == WM_QUIT) {
 				/* Keep WM_QUIT for the main message loop */
 				PostQuitMessage((int)vMessage.wParam);
+				if (wincom_endcall(pPointer)) {
+					return;
+				}
 				RING_API_RETNUMBER(nCount);
 				return;
 			}
@@ -3232,7 +3300,7 @@ RING_FUNC(ring_com_processmessages) {
 		}
 		MsgWaitForMultipleObjectsEx(0, NULL, nWait - nElapsed, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
 	}
-	if (wincom_raiseeventerror(pPointer)) {
+	if (wincom_endcall(pPointer)) {
 		return;
 	}
 	RING_API_RETNUMBER(nCount);
