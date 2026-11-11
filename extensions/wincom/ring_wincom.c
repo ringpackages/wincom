@@ -1997,9 +1997,9 @@ RING_FUNC(ring_com_release) {
 /*
 **  Create a one dimension array of nBaseType (like VT_BSTR or VT_I4) from the items of a Ring list
 **  Each item is converted to nBaseType (Strings using the invariant locale)
-**  Returns E_INVALIDARG (with cWinCOMError) if the type or an item is not supported
+**  Returns 1 on success, 0 on error (cWinCOMError contains the error message)
 */
-static HRESULT wincom_listtotypedarray(List *pList, VARTYPE nBaseType, VARIANT *pVar) {
+static int wincom_listtotypedarray(List *pList, VARTYPE nBaseType, VARIANT *pVar) {
 	SAFEARRAY *pArray;
 	VARIANT vItem, vConverted;
 	DECIMAL vDecimal;
@@ -2009,29 +2009,31 @@ static HRESULT wincom_listtotypedarray(List *pList, VARTYPE nBaseType, VARIANT *
 	VariantInit(pVar);
 	if (!wincom_issimpletype(nBaseType) && (nBaseType != VT_DECIMAL)) {
 		wincom_seterrortext("Error, WinCOM: The array type is not supported");
-		return E_INVALIDARG;
+		return 0;
 	}
 	nSize = ring_list_getsize(pList);
 	pArray = SafeArrayCreateVector(nBaseType, 0, nSize);
 	if (pArray == NULL) {
-		return E_OUTOFMEMORY;
+		wincom_seterrortext(WINCOM_ERROR_OOM);
+		return 0;
 	}
 	for (x = 1; x <= nSize; x++) {
 		if (ring_list_islist(pList, x) && !ring_list_iscpointerlist(ring_list_getlist(pList, x))) {
 			SafeArrayDestroy(pArray);
 			wincom_seterrortext("Error, WinCOM: Typed arrays can't contain lists (use VT_ARRAY + VT_VARIANT)");
-			return E_INVALIDARG;
+			return 0;
 		}
 		if (!wincom_itemtovariant(pList, x, &vItem, 1)) {
 			SafeArrayDestroy(pArray);
-			return E_INVALIDARG;
+			return 0;
 		}
 		VariantInit(&vConverted);
 		hr = VariantChangeTypeEx(&vConverted, &vItem, LOCALE_INVARIANT, 0, nBaseType);
 		VariantClear(&vItem);
 		if (FAILED(hr)) {
 			SafeArrayDestroy(pArray);
-			return hr;
+			wincom_seterror("com_variant()", hr, NULL);
+			return 0;
 		}
 		nIndex = (LONG)x - 1;
 		/* SafeArrayPutElement() copies the data (BSTR, objects) */
@@ -2048,12 +2050,13 @@ static HRESULT wincom_listtotypedarray(List *pList, VARTYPE nBaseType, VARIANT *
 		VariantClear(&vConverted);
 		if (FAILED(hr)) {
 			SafeArrayDestroy(pArray);
-			return hr;
+			wincom_seterror("com_variant()", hr, NULL);
+			return 0;
 		}
 	}
 	V_VT(pVar) = (VARTYPE)(VT_ARRAY | nBaseType);
 	V_ARRAY(pVar) = pArray;
-	return S_OK;
+	return 1;
 }
 
 /* com_variant(nVarType, vValue) --> VARIANT (C pointer) that can be passed to COM methods */
@@ -2116,18 +2119,10 @@ RING_FUNC(ring_com_variant) {
 		}
 		V_VT(pVar) = VT_ARRAY | VT_UI1;
 		V_ARRAY(pVar) = pArray;
-	} else if ((nType & VT_ARRAY) && ((nType & VT_TYPEMASK) != VT_VARIANT) && RING_API_ISLIST(2) &&
+	} else if (((nType & ~VT_TYPEMASK) == VT_ARRAY) && ((nType & VT_TYPEMASK) != VT_VARIANT) && RING_API_ISLIST(2) &&
 		   !ring_list_iscpointerlist(RING_API_GETLIST(2))) {
 		/* Typed array (like VT_ARRAY + VT_BSTR) from a list of values */
-		hr = wincom_listtotypedarray(RING_API_GETLIST(2), (VARTYPE)(nType & VT_TYPEMASK), pVar);
-		if (FAILED(hr) && (hr != E_INVALIDARG)) {
-			VariantClear(pVar);
-			free(pVar);
-			wincom_seterror("com_variant()", hr, NULL);
-			RING_API_ERROR(cWinCOMError);
-			return;
-		}
-		if (hr == E_INVALIDARG) {
+		if (!wincom_listtotypedarray(RING_API_GETLIST(2), (VARTYPE)(nType & VT_TYPEMASK), pVar)) {
 			free(pVar);
 			RING_API_ERROR(cWinCOMError);
 			return;
@@ -2707,6 +2702,7 @@ static HRESULT STDMETHODCALLTYPE wincom_sink_invoke(IDispatch *pThis, DISPID nDi
 						     EXCEPINFO *pExcepInfo, UINT *pArgErr) {
 	WinCOMSink *pSink;
 	WinCOMEvent vEvent;
+	IErrorInfo *pErrorInfo;
 	char *cName, *cCode, *cCodeCopy;
 	size_t nSize;
 	int x;
@@ -2762,7 +2758,19 @@ static HRESULT STDMETHODCALLTYPE wincom_sink_invoke(IDispatch *pThis, DISPID nDi
 	pWinCOMEvent = &vEvent;
 	/* The handler can disconnect the events (and the Ring GC can delete the C pointer) */
 	IDispatch_AddRef(pThis);
+	/*
+	**  The object that raised the event can have error information for the current call
+	**  The handler can call members (they clear it), so we keep it and set it again after the handler
+	*/
+	pErrorInfo = NULL;
+	if (GetErrorInfo(0, &pErrorInfo) != S_OK) {
+		pErrorInfo = NULL;
+	}
 	ring_vm_runcode(pSink->pVM, cCode);
+	SetErrorInfo(0, pErrorInfo);
+	if (pErrorInfo != NULL) {
+		IErrorInfo_Release(pErrorInfo);
+	}
 	pWinCOMEvent = vEvent.pPrev;
 	IDispatch_Release(pThis);
 	free(cCode);
