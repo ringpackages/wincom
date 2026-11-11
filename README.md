@@ -20,11 +20,20 @@ oConnection = com_createobject("ADODB.Connection")
 com_invoke(oConnection, "Open", "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\Data\Shop.accdb")
 oRecordset = com_invoke(oConnection, "Execute", "SELECT Name, Price FROM Products")
 while ! com_get(oRecordset, "EOF")
-	? com_get(oRecordset, 'Fields("Name").Value') + " : " + com_get(oRecordset, 'Fields("Price").Value')
+	? com_get(oRecordset, 'Fields("Name").Value') + " : " + 
+	  com_get(oRecordset, 'Fields("Price").Value')
 	com_invoke(oRecordset, "MoveNext")
 end
 com_invoke(oConnection, "Close")
 ```
+
+## Installation
+
+	ringpm install wincom from ringpackages
+
+The package includes `ring_wincom.dll` (64-bit) for MS-Windows. COM is available on MS-Windows only.
+
+The Microsoft Access samples need the **Microsoft Access Database Engine** (the ACE OLE DB provider). It's installed with Microsoft Office, or can be installed using the *Microsoft Access Database Engine Redistributable*. Ring 64-bit needs the 64-bit engine. Ring 32-bit can also use the `Microsoft.Jet.OLEDB.4.0` provider (`.mdb` files), which is part of MS-Windows.
 
 ## Features
 
@@ -47,13 +56,6 @@ com_invoke(oConnection, "Close")
 - Read the constants (enumerations) of type libraries using `com_constants()`, like `adOpenStatic`, `xlBarClustered` or `wdFormatPDF`, and generate Ring files that define them
 - Can be used from many threads (RingThreads): each thread has its own COM apartment and state
 
-## Installation
-
-	ringpm install wincom from ringpackages
-
-The package includes `ring_wincom.dll` (64-bit) for MS-Windows. COM is available on MS-Windows only.
-
-The Microsoft Access samples need the **Microsoft Access Database Engine** (the ACE OLE DB provider). It's installed with Microsoft Office, or can be installed using the *Microsoft Access Database Engine Redistributable*. Ring 64-bit needs the 64-bit engine. Ring 32-bit can also use the `Microsoft.Jet.OLEDB.4.0` provider (`.mdb` files), which is part of MS-Windows.
 
 ## Quick Start
 
