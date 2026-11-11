@@ -228,7 +228,7 @@ ID | Name      | Category   | Price | Quantity | Added      | InStock | Notes
 
 | Function | Description |
 |----------|-------------|
-| `com_createobject(cProgID, [cServer])` | Create a COM object (like `CreateObject()` in Visual Basic). `cProgID` is a ProgID (`"ADODB.Connection"`) or a CLSID (`"{EE09B103-97E0-11CF-978F-00A02463E06F}"`). `cServer` is the computer name to create the object on another computer (DCOM): the class must be registered on this computer too (or use the CLSID), and it must be an out-of-process server |
+| `com_createobject(cProgID, [cServer])` | Create a COM object (like `CreateObject()` in Visual Basic). `cProgID` is a ProgID (`"ADODB.Connection"`) or a CLSID (`"{EE09B103-97E0-11CF-978F-00A02463E06F}"`). `cServer` is the computer name to create the object on another computer (DCOM): the class must be registered on this computer too (or use the CLSID), and it must be an out-of-process server (see [Using COM Objects on Other Computers](#using-com-objects-on-other-computers-dcom)) |
 | `com_getobject(cName)` | Get an object using a moniker (like `GetObject()`): `"winmgmts:"`, `"winmgmts:root\cimv2"`, a file name (`"C:\Data\Book.xlsx"`), ... |
 | `com_getactiveobject(cProgID)` | Get the running instance of an application (for example `"Excel.Application"`) |
 | `com_progidexists(cProgID)` | Return `1` if the ProgID (or the CLSID) is registered |
@@ -455,6 +455,37 @@ Each call costs less than 1 microsecond for in-process objects (like `Scripting.
 
 Each thread has its own COM apartment (Single-Threaded Apartment) and its own state (the last error, the last type, the current event). COM is initialized for each thread by the first `com_*()` function that it calls. Create the COM objects in the thread that uses them: don't pass a COM object from one thread to another (see `test28_threads.ring`).
 
+## Using COM Objects on Other Computers (DCOM)
+
+`com_createobject(cProgID, cServer)` creates the object on another computer:
+
+```ring
+oExcel = com_createobject("Excel.Application", "SERVER01")
+? com_get(oExcel, "Version")
+com_invoke(oExcel, "Quit")
+```
+
+- The object is created using the account of the user that runs the program (there is no parameter for another user name and password).
+- Both computers must accept this account (the same domain, or the same user name and password on computers in a workgroup), and the other computer must allow it: DCOM is enabled, the launch and access permissions of the class (`dcomcnfg`) and the firewall.
+- The class must be an out-of-process server (an EXE, like the Microsoft Office applications). In-process classes (DLLs, like `Scripting.Dictionary`) can't be created on other computers.
+- The ProgID is converted using the registry of this computer, so the class must be registered on this computer too, or use its CLSID (`"{...}"`).
+- The security settings of COM (authentication and impersonation levels) are the default settings of Windows.
+- Events from objects on other computers need the other computer to call this computer, so this computer must accept these calls (they often fail between computers in a workgroup).
+- `com_getactiveobject()` and `com_getobject()` use this computer only (the running objects are listed for each computer).
+- Tested on one computer only (the computer name, `localhost` and `127.0.0.1`), not with a real second computer.
+
+For WMI (system information and management) on other computers, DCOM is not needed in the program, and other credentials can be used:
+
+```ring
+# The current user
+oWMI = com_getobject("winmgmts:\\SERVER01\root\cimv2")
+
+# Another user (SWbemLocator.ConnectServer(Server, Namespace, User, Password))
+oLocator = com_createobject("WbemScripting.SWbemLocator")
+oWMI = com_invoke(oLocator, "ConnectServer", "SERVER01", "root\cimv2", "DOMAIN\User", cPassword)
+aSystems = com_items(com_invoke(oWMI, "ExecQuery", "SELECT Caption FROM Win32_OperatingSystem"))
+```
+
 ## Notes about Microsoft Access
 
 These notes are about the Microsoft Access Database Engine (ACE). The same problems happen in VBScript and Visual Basic:
@@ -472,6 +503,8 @@ These notes are about the Microsoft Access Database Engine (ACE). The same probl
 
 
 ## Known Limitations
+
+- DCOM uses the account of the user that runs the program and the default security settings of COM (see [Using COM Objects on Other Computers](#using-com-objects-on-other-computers-dcom)).
 
 - `ByRef` arguments must be created using `com_byref()`; other values are passed by value.
 - Events need an events interface that supports `IDispatch` (dispinterfaces, like ADO, Office and most Automation objects).
