@@ -1,6 +1,5 @@
 /*
 	WinCOM - Windows COM (Component Object Model) for the Ring Programming Language
-	Copyright (c) 2026 Mahmoud Fayed <msfclipper@yahoo.com>
 
 	The com_*() functions (written in C) use COM Automation (IDispatch)
 	So we can use ADO, ADOX, Scripting, WScript, WMI, Microsoft Office, ... from Ring

@@ -1,5 +1,3 @@
-/* Copyright (c) 2026 Mahmoud Fayed <msfclipper@yahoo.com> */
-
 /*
 **  WinCOM - Windows COM (Component Object Model) for the Ring Programming Language
 **
