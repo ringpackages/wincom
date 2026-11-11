@@ -158,6 +158,7 @@ func testValues
 	checkError("Typed array with a list", "com_variant(VT_ARRAY + VT_I4, [[1]])", "can't contain lists")
 	checkError("Typed array unsupported type", "com_variant(VT_ARRAY + 36, [1])", "not supported")
 	checkError("Typed array out of range", "com_variant(VT_ARRAY + VT_I2, [100000])", "0x8002000A")
+	checkError("Typed array with VT_BYREF", "com_variant(VT_ARRAY + 16384 + VT_I4, [1])", "com_variant()")
 	check("com_version()", com_version(), "1.0.0")
 
 func testPaths
