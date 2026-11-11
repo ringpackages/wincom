@@ -55,6 +55,7 @@ The Microsoft Access samples need the **Microsoft Access Database Engine** (the 
 - Two dimensions arrays (`com_matrix()`), like `Range.Value` in Microsoft Excel: write or read all the cells in one call
 - Read the constants (enumerations) of type libraries using `com_constants()`, like `adOpenStatic`, `xlBarClustered` or `wdFormatPDF`, and generate Ring files that define them
 - Can be used from many threads (RingThreads): each thread has its own COM apartment and state
+- Create objects on other computers (DCOM) using `com_createobject(cProgID, cServer)`
 
 
 ## Quick Start
@@ -197,6 +198,7 @@ The samples are in `ring/samples/UsingWinCOM`.
 | `test26_generate_constants.ring` | Read the constants of a type library using `com_constants()` and generate a Ring file (`ring test26_generate_constants.ring Excel.Application excelconstants.ring`) |
 | `test27_excel_and_csv_files.ring` | Create and read Excel workbooks and CSV files using ADO (without Microsoft Excel), and import prices from a workbook into an Access table |
 | `test28_threads.ring` | Using COM objects from many threads (RingThreads) |
+| `test29_wmi_events.ring` | Asynchronous WMI events: know when processes start and stop (`WbemScripting.SWbemSink` and `com_processmessages()`) |
 
 The Microsoft Access samples use `accesshelper.ring`. It selects the provider (`Microsoft.ACE.OLEDB.16.0`, `Microsoft.ACE.OLEDB.12.0` or `Microsoft.Jet.OLEDB.4.0`), creates the sample database and the `Products` table, and prints Recordsets as tables. The samples delete the database files at the end. The Office samples keep the files that they create (`products.xlsx`, `products_2d.xlsx`, `products_report.docx` and `products_report.pdf`), and `test26_generate_constants.ring` keeps the generated file (`adoconstants.ring`).
 
@@ -224,7 +226,7 @@ ID | Name      | Category   | Price | Quantity | Added      | InStock | Notes
 
 | Function | Description |
 |----------|-------------|
-| `com_createobject(cProgID)` | Create a COM object (like `CreateObject()` in Visual Basic). `cProgID` is a ProgID (`"ADODB.Connection"`) or a CLSID (`"{EE09B103-97E0-11CF-978F-00A02463E06F}"`) |
+| `com_createobject(cProgID, [cServer])` | Create a COM object (like `CreateObject()` in Visual Basic). `cProgID` is a ProgID (`"ADODB.Connection"`) or a CLSID (`"{EE09B103-97E0-11CF-978F-00A02463E06F}"`). `cServer` is the computer name to create the object on another computer (DCOM): the class must be registered on this computer too (or use the CLSID), and it must be an out-of-process server |
 | `com_getobject(cName)` | Get an object using a moniker (like `GetObject()`): `"winmgmts:"`, `"winmgmts:root\cimv2"`, a file name (`"C:\Data\Book.xlsx"`), ... |
 | `com_getactiveobject(cProgID)` | Get the running instance of an application (for example `"Excel.Application"`) |
 | `com_progidexists(cProgID)` | Return `1` if the ProgID (or the CLSID) is registered |
@@ -276,7 +278,7 @@ The arguments after `cPath` are added after the arguments written in the last me
 | `com_seteventresult(vValue)` | In the handler: the return value of the event (few events use it) |
 | `com_processmessages([nMilliseconds])` | Process the Windows messages (like `DoEvents` in Visual Basic), and wait `nMilliseconds` (default: `0`). Return the number of processed messages |
 
-Events from in-process objects (like ADO) happen while we call their methods. Events from other programs (like Excel) happen while we call their methods, while `com_processmessages()` runs, or in the event loop of a GUI library (like RingQt). The handler runs inside `try/catch`: if it raises an error, the error is raised again by the `com_*()` function that caused the event (`Error, WinCOM: Event <Name> : <Error>`). If the event didn't happen during a `com_*()` function (for example in the event loop of RingQt), the error is printed.
+Events from in-process objects (like ADO) happen while we call their methods. Events from other programs (like Excel) happen while we call their methods, while `com_processmessages()` runs, or in the event loop of a GUI library (like RingQt). The handler runs inside `try/catch`: if it raises an error, the error is raised again by the `com_*()` function that was running when the event happened (`Error, WinCOM: Event <Name> : <Error>`). This is usually the function that caused the event, but events from other programs can also arrive while any `com_*()` function waits for another program. If the event didn't happen during a `com_*()` function (for example in the event loop of RingQt), the error is printed and the program continues.
 
 ### Objects
 

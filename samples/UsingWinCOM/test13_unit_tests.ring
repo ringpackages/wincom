@@ -251,6 +251,10 @@ func testObjects
 	check("com_constants() from a file", len(com_constants(cADO)), len(aConstants))
 	checkError("com_constants() bad file", 'com_constants("nofile.dll")', "nofile.dll")
 	checkError("com_constants() bad parameter", "com_constants(5)", "type library file name")
+	check("com_createobject() with an empty server", com_get(com_createobject("Scripting.Dictionary", ""), "Count"), 0)
+	checkError("com_createobject() server: in-process class", 'com_createobject("Scripting.Dictionary", sysget("COMPUTERNAME"))', "0x80040154")
+	checkError("com_createobject() server must be a string", 'com_createobject("Scripting.Dictionary", 5)', "Bad parameter type")
+	checkError("com_createobject() parameters count", 'com_createobject("Scripting.Dictionary", "", "")', "Bad parameters count")
 	check("CLSID string", com_typename(com_createobject("{EE09B103-97E0-11CF-978F-00A02463E06F}")), "IDictionary")
 
 func checkRefCountInFunction oOuter, oInner
