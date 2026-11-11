@@ -26,11 +26,6 @@ end
 com_invoke(oConnection, "Close")
 ```
 
-The package is one folder, `ring/extensions/wincom`:
-
-- **C Extension**: one C file (`ring_wincom.c`) that uses the COM API (`CoCreateInstance()`, `IDispatch`, `VARIANT`, `SAFEARRAY`, ...). It builds to `ring_wincom.dll`.
-- **Ring Code**: `wincom.ring` loads the extension and the Ring code: `globals.ring` (VARIANT types and ADO constants), `functions.ring` (helper functions), `comobject.ring` (the `COMObject` class) and `comevents.ring` (the `COMEvents` class). Programs use `load "wincom.ring"` (through `ring/bin/load/wincom.ring`).
-
 ## Features
 
 - Create COM objects using the ProgID (`"ADODB.Connection"`) or the CLSID (`"{...}"`), get objects using monikers (`"winmgmts:"`, file names) or the running instance (`Excel.Application`)
@@ -51,9 +46,6 @@ The package is one folder, `ring/extensions/wincom`:
 - Two dimensions arrays (`com_matrix()`), like `Range.Value` in Microsoft Excel: write or read all the cells in one call
 - Read the constants (enumerations) of type libraries using `com_constants()`, like `adOpenStatic`, `xlBarClustered` or `wdFormatPDF`, and generate Ring files that define them
 - Can be used from many threads (RingThreads): each thread has its own COM apartment and state
-- Unit tests (179 tests: conversions, paths, objects, reference counting, ByRef and named arguments, events, two dimensions arrays, constants, errors, Microsoft Access field types)
-- Tested using Ring 64-bit (ACE, `.accdb`) and Ring 32-bit (Jet, `.mdb`)
-- Tested using AddressSanitizer and fuzzing (conversions, paths, `com_variant()`, arguments); the memory stays stable in long runs
 
 ## Installation
 
@@ -167,6 +159,61 @@ com_set(oCommand, "CommandText", "SELECT Name FROM Products WHERE Price >= ?")
 com_invoke(oCommand, "Parameters.Append",
 	com_invoke(oCommand, "CreateParameter", "pPrice", adCurrency, adParamInput, 0, 20))
 oRecordset = com_invoke(oCommand, "Execute")
+```
+
+## Samples
+
+The samples are in `ring/samples/UsingWinCOM`.
+
+| Sample | Description |
+|--------|-------------|
+| `test01_scripting_dictionary.ring` | `com_createobject()`, `com_invoke()`, `com_get()`, `com_set()`, `com_items()` using `Scripting.Dictionary` |
+| `test02_filesystemobject.ring` | Drives, folders and Unicode text files using `Scripting.FileSystemObject` |
+| `test03_comobject_class.ring` | The `COMObject` class: `WScript.Shell`, environment variables, running commands, braces, members |
+| `test04_create_access_database.ring` | Create a Microsoft Access database (ADOX), create tables and indexes (SQL), read the structure (ADOX Catalog) |
+| `test05_insert_and_select.ring` | `INSERT`, `UPDATE`, `DELETE`, `SELECT`, fields, Null values and aggregate functions |
+| `test06_parameters.ring` | `ADODB.Command` with parameters (Unicode, quotes and SQL injection are safe) |
+| `test07_recordset_editing.ring` | `ADODB.Recordset`: `AddNew`, `Update`, `Delete`, `Find`, `Filter`, `Sort` |
+| `test08_getrows_and_schema.ring` | `GetRows()`, `com_rowsfromcolumns()`, `OpenSchema()` (tables and columns) |
+| `test09_transactions.ring` | `BeginTrans()`, `CommitTrans()`, `RollbackTrans()` |
+| `test10_errors.ring` | Errors from COM objects and from the database engine, `Connection.Errors` |
+| `test11_export_data.ring` | Export to CSV (`GetString()` + `ADODB.Stream`) and XML (`Recordset.Save()`), binary data |
+| `test12_access_to_excel.ring` | Copy the data of an Access database to an Excel workbook (needs Microsoft Excel) |
+| `test13_unit_tests.ring` | Unit tests |
+| `test14_wmi.ring` | System information using WMI (`com_getobject("winmgmts:")`) |
+| `test15_byref_and_named_args.ring` | `com_byref()` (`RecordsAffected`) and `com_named()` (`Recordset.Open()` with named arguments) |
+| `test16_ado_events.ring` | ADO events: log the SQL statements and cancel `DROP` statements |
+| `test17_excel_events.ring` | Excel events: `SheetChange`, `NewWorkbook`, cancel `BeforeClose` (needs Microsoft Excel) |
+| `test18_adox_objects.ring` | Create tables, primary and foreign keys and indexes using the ADOX objects |
+| `test19_access_queries.ring` | Saved queries: views, parameter queries and action queries |
+| `test20_compact_database.ring` | Compact a database using DAO (`.accdb`) or JRO (`.mdb`, Ring 32-bit) |
+| `test21_products_gui.ring` | A GUI application (RingQt): search, add, delete and edit the records of an Access table |
+| `test22_excel_2d_arrays.ring` | Export to Excel using `com_matrix()` (one call for all the cells), formats, a formula and a chart (needs Microsoft Excel) |
+| `test23_word_report.ring` | A Word report (heading, paragraph and table) from an Access table, saved as `.docx` and `.pdf` (needs Microsoft Word) |
+| `test24_msxml.ring` | XML using MSXML: create, save, load, XPath queries and parse errors |
+| `test25_com_explorer.ring` | Print the properties, methods (with the parameter names and descriptions) and events of a COM object (`ring test25_com_explorer.ring ADODB.Connection`) |
+| `test26_generate_constants.ring` | Read the constants of a type library using `com_constants()` and generate a Ring file (`ring test26_generate_constants.ring Excel.Application excelconstants.ring`) |
+| `test27_excel_and_csv_files.ring` | Create and read Excel workbooks and CSV files using ADO (without Microsoft Excel), and import prices from a workbook into an Access table |
+| `test28_threads.ring` | Using COM objects from many threads (RingThreads) |
+
+The Microsoft Access samples use `accesshelper.ring`. It selects the provider (`Microsoft.ACE.OLEDB.16.0`, `Microsoft.ACE.OLEDB.12.0` or `Microsoft.Jet.OLEDB.4.0`), creates the sample database and the `Products` table, and prints Recordsets as tables. The samples delete the database files at the end. The Office samples keep the files that they create (`products.xlsx`, `products_2d.xlsx`, `products_report.docx` and `products_report.pdf`), and `test26_generate_constants.ring` keeps the generated file (`adoconstants.ring`).
+
+Screen shot of `test21_products_gui.ring`:
+
+![Products GUI](images/wincom_shot1.png)
+
+Output of `test05_insert_and_select.ring` (first part):
+
+```
+All the products:
+
+ID | Name      | Category   | Price | Quantity | Added      | InStock | Notes
+---+-----------+------------+-------+----------+------------+---------+--------------
+1  | Product A | Category 1 | 10.50 | 100      | 2026-01-05 | 1       | First product
+2  | Product B | Category 1 | 25    | 0        | 2026-01-12 | 0       | (Null)
+3  | Product C | Category 2 | 7.25  | 42       | 2026-02-03 | 1       | Fragile
+4  | Product D | Category 2 | 99.99 | 5        | 2026-03-18 | 1       | (Null)
+5  | Product E | Category 3 | 3     | 250      | 2026-04-22 | 1       | Sold in packs
 ```
 
 ## API Reference
@@ -416,68 +463,6 @@ These notes are about the Microsoft Access Database Engine (ACE). The same probl
 - Excel workbooks and CSV files can be used like databases (`Extended Properties='Excel 12.0 Xml;HDR=YES'` or `'text;HDR=YES;FMT=Delimited'`), without Microsoft Excel. Excel text columns are Memo columns.
 - The engine of new Microsoft Office versions (ACE 16) refuses queries that read other files from an Access connection (like `SELECT * FROM [Excel 12.0 Xml;DATABASE=file].[Sheet$]`): the error is `Operation is not supported for this type of object`. Open a connection to the file instead (see `test27_excel_and_csv_files.ring`). Jet (Ring 32-bit) supports these queries.
 
-### Using Microsoft Access with RingQt
-
-The Ring folder (`ring/bin`) has the Visual C++ runtime DLLs (`msvcp140.dll`, ...) that RingQt uses. Ring 1.28 includes version 14.44, so RingQt and the Microsoft Access Database Engine work together without extra steps.
-
-Older Ring versions include an older runtime (14.36). The Access Database Engine of new Microsoft Office versions needs a newer one: if RingQt is loaded first, the engine uses the older DLLs and the program closes (error `0xC0000409`) when it opens a database. With these versions, load the engine before `load "guilib.ring"` (`test21_products_gui.ring` does that using `accessLoadEngine()` from `accesshelper.ring`, which is harmless with Ring 1.28), or install the latest Visual C++ runtime DLLs in `ring/bin`.
-
-Also, `QApp.quit()` calls `exit()`: the code after `exec()` doesn't run. Close the main window to end the event loop (then the code after `exec()` can close the connections).
-
-## Samples
-
-The samples are in `ring/samples/UsingWinCOM`.
-
-| Sample | Description |
-|--------|-------------|
-| `test01_scripting_dictionary.ring` | `com_createobject()`, `com_invoke()`, `com_get()`, `com_set()`, `com_items()` using `Scripting.Dictionary` |
-| `test02_filesystemobject.ring` | Drives, folders and Unicode text files using `Scripting.FileSystemObject` |
-| `test03_comobject_class.ring` | The `COMObject` class: `WScript.Shell`, environment variables, running commands, braces, members |
-| `test04_create_access_database.ring` | Create a Microsoft Access database (ADOX), create tables and indexes (SQL), read the structure (ADOX Catalog) |
-| `test05_insert_and_select.ring` | `INSERT`, `UPDATE`, `DELETE`, `SELECT`, fields, Null values and aggregate functions |
-| `test06_parameters.ring` | `ADODB.Command` with parameters (Unicode, quotes and SQL injection are safe) |
-| `test07_recordset_editing.ring` | `ADODB.Recordset`: `AddNew`, `Update`, `Delete`, `Find`, `Filter`, `Sort` |
-| `test08_getrows_and_schema.ring` | `GetRows()`, `com_rowsfromcolumns()`, `OpenSchema()` (tables and columns) |
-| `test09_transactions.ring` | `BeginTrans()`, `CommitTrans()`, `RollbackTrans()` |
-| `test10_errors.ring` | Errors from COM objects and from the database engine, `Connection.Errors` |
-| `test11_export_data.ring` | Export to CSV (`GetString()` + `ADODB.Stream`) and XML (`Recordset.Save()`), binary data |
-| `test12_access_to_excel.ring` | Copy the data of an Access database to an Excel workbook (needs Microsoft Excel) |
-| `test13_unit_tests.ring` | Unit tests |
-| `test14_wmi.ring` | System information using WMI (`com_getobject("winmgmts:")`) |
-| `test15_byref_and_named_args.ring` | `com_byref()` (`RecordsAffected`) and `com_named()` (`Recordset.Open()` with named arguments) |
-| `test16_ado_events.ring` | ADO events: log the SQL statements and cancel `DROP` statements |
-| `test17_excel_events.ring` | Excel events: `SheetChange`, `NewWorkbook`, cancel `BeforeClose` (needs Microsoft Excel) |
-| `test18_adox_objects.ring` | Create tables, primary and foreign keys and indexes using the ADOX objects |
-| `test19_access_queries.ring` | Saved queries: views, parameter queries and action queries |
-| `test20_compact_database.ring` | Compact a database using DAO (`.accdb`) or JRO (`.mdb`, Ring 32-bit) |
-| `test21_products_gui.ring` | A GUI application (RingQt): search, add, delete and edit the records of an Access table |
-| `test22_excel_2d_arrays.ring` | Export to Excel using `com_matrix()` (one call for all the cells), formats, a formula and a chart (needs Microsoft Excel) |
-| `test23_word_report.ring` | A Word report (heading, paragraph and table) from an Access table, saved as `.docx` and `.pdf` (needs Microsoft Word) |
-| `test24_msxml.ring` | XML using MSXML: create, save, load, XPath queries and parse errors |
-| `test25_com_explorer.ring` | Print the properties, methods (with the parameter names and descriptions) and events of a COM object (`ring test25_com_explorer.ring ADODB.Connection`) |
-| `test26_generate_constants.ring` | Read the constants of a type library using `com_constants()` and generate a Ring file (`ring test26_generate_constants.ring Excel.Application excelconstants.ring`) |
-| `test27_excel_and_csv_files.ring` | Create and read Excel workbooks and CSV files using ADO (without Microsoft Excel), and import prices from a workbook into an Access table |
-| `test28_threads.ring` | Using COM objects from many threads (RingThreads) |
-
-The Microsoft Access samples use `accesshelper.ring`. It selects the provider (`Microsoft.ACE.OLEDB.16.0`, `Microsoft.ACE.OLEDB.12.0` or `Microsoft.Jet.OLEDB.4.0`), creates the sample database and the `Products` table, and prints Recordsets as tables. The samples delete the database files at the end. The Office samples keep the files that they create (`products.xlsx`, `products_2d.xlsx`, `products_report.docx` and `products_report.pdf`), and `test26_generate_constants.ring` keeps the generated file (`adoconstants.ring`).
-
-Screen shot of `test21_products_gui.ring`:
-
-![Products GUI](images/wincom_shot1.png)
-
-Output of `test05_insert_and_select.ring` (first part):
-
-```
-All the products:
-
-ID | Name      | Category   | Price | Quantity | Added      | InStock | Notes
----+-----------+------------+-------+----------+------------+---------+--------------
-1  | Product A | Category 1 | 10.50 | 100      | 2026-01-05 | 1       | First product
-2  | Product B | Category 1 | 25    | 0        | 2026-01-12 | 0       | (Null)
-3  | Product C | Category 2 | 7.25  | 42       | 2026-02-03 | 1       | Fragile
-4  | Product D | Category 2 | 99.99 | 5        | 2026-03-18 | 1       | (Null)
-5  | Product E | Category 3 | 3     | 250      | 2026-04-22 | 1       | Sold in packs
-```
 
 ## Known Limitations
 
@@ -487,19 +472,6 @@ ID | Name      | Category   | Price | Quantity | Added      | InStock | Notes
 - COM is initialized in the Single-Threaded Apartment of the thread that uses the functions (like Visual Basic). Don't share COM objects between Ring threads.
 - The OLE DB provider must have the same architecture as Ring (64-bit Ring needs a 64-bit provider).
 - Ring keeps some temporary values until the function returns, so a COM object may be released when the function returns (not immediately when the variable changes). Call `Close()` (for connections, recordsets and files), `Quit()` (for applications) or `com_release()` when you need it now.
-
-## Building the Extension
-
-Go to `ring/extensions/wincom` and run:
-
-| Platform | Command |
-|----------|---------|
-| MS-Windows (32-bit) | `buildvc.bat` |
-| MS-Windows (64-bit) | `buildvc_x64.bat` |
-
-The build writes `ring/bin/ring_wincom.dll`. The extension is one C file (`ring_wincom.c`), so no code generation step is needed.
-
-To distribute a program using `ring2exe`, add the `-wincom` option to copy the extension library.
 
 ## License
 
