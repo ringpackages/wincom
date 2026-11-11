@@ -1166,6 +1166,8 @@ static HRESULT wincom_invokemember(IDispatch *pDispatch, const char *cName, WORD
 	if (pResult != NULL) {
 		VariantInit(pResult);
 	}
+	/* Clear the error information of the thread (Some objects use it to fill EXCEPINFO, so an old error appears) */
+	SetErrorInfo(0, NULL);
 	hr = IDispatch_Invoke(pDispatch, nDispID, &IID_NULL, LOCALE_USER_DEFAULT, nFlags, &vParams, pResult, pExcepInfo,
 			      &nArgErr);
 done:
@@ -1715,19 +1717,61 @@ static void wincom_returnobject(void *pPointer, IDispatch *pDispatch, HRESULT hr
 	RING_API_RETMANAGEDCPOINTER(pDispatch, WINCOM_OBJECT, wincom_freeobject);
 }
 
-/* com_createobject(cProgID) --> COM object */
+/* Create the object on another computer (DCOM), the class must be registered on this computer too (or use a CLSID) */
+static HRESULT wincom_createremote(CLSID *pCLSID, const char *cServer, int nSize, IDispatch **ppDispatch) {
+	COSERVERINFO vServer;
+	MULTI_QI vQI;
+	BSTR cWide;
+	HRESULT hr;
+	cWide = wincom_tobstr(cServer, nSize);
+	if (cWide == NULL) {
+		return E_OUTOFMEMORY;
+	}
+	memset(&vServer, 0, sizeof(COSERVERINFO));
+	vServer.pwszName = cWide;
+	memset(&vQI, 0, sizeof(MULTI_QI));
+	vQI.pIID = &IID_IDispatch;
+	hr = CoCreateInstanceEx(pCLSID, NULL, CLSCTX_REMOTE_SERVER | CLSCTX_LOCAL_SERVER, &vServer, 1, &vQI);
+	SysFreeString(cWide);
+	if (SUCCEEDED(hr)) {
+		hr = vQI.hr;
+	}
+	if (SUCCEEDED(hr)) {
+		*ppDispatch = (IDispatch *)vQI.pItf;
+	} else if (vQI.pItf != NULL) {
+		IUnknown_Release(vQI.pItf);
+	}
+	return hr;
+}
+
+/* com_createobject(cProgID, [cServer]) --> COM object (cServer: the computer name for DCOM) */
 RING_FUNC(ring_com_createobject) {
 	CLSID vCLSID;
 	IDispatch *pDispatch;
 	HRESULT hr;
-	if (!wincom_checkstringparameter(pPointer)) {
+	int lRemote;
+	if ((RING_API_PARACOUNT < 1) || (RING_API_PARACOUNT > 2)) {
+		RING_API_ERROR(WINCOM_ERROR_PARACOUNT);
 		return;
 	}
+	if (!RING_API_ISSTRING(1) || ((RING_API_PARACOUNT == 2) && !RING_API_ISSTRING(2))) {
+		RING_API_ERROR(RING_API_BADPARATYPE);
+		return;
+	}
+	if (!wincom_init()) {
+		RING_API_ERROR(WINCOM_ERROR_INIT);
+		return;
+	}
+	lRemote = (RING_API_PARACOUNT == 2) && (RING_API_GETSTRINGSIZE(2) > 0);
 	pDispatch = NULL;
 	hr = wincom_getclsid(RING_API_GETSTRING(1), RING_API_GETSTRINGSIZE(1), &vCLSID);
 	if (SUCCEEDED(hr)) {
-		hr = CoCreateInstance(&vCLSID, NULL, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER, &IID_IDispatch,
-				      (void **)&pDispatch);
+		if (lRemote) {
+			hr = wincom_createremote(&vCLSID, RING_API_GETSTRING(2), RING_API_GETSTRINGSIZE(2), &pDispatch);
+		} else {
+			hr = CoCreateInstance(&vCLSID, NULL, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER, &IID_IDispatch,
+					      (void **)&pDispatch);
+		}
 	}
 	wincom_returnobject(pPointer, pDispatch, hr, RING_API_GETSTRING(1));
 }
