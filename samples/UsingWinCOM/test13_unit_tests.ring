@@ -10,6 +10,7 @@ nFailed = 0
 # Used by the event handlers
 aEventLog = []
 oEventConnection = NULL
+oByRefInEvent = NULL
 
 func main
 	testValues()
@@ -127,6 +128,9 @@ func testValues
 	check("Byte array", roundTrip(com_bytes(cBytes)), cBytes)
 	check("Empty byte array", roundTrip(com_bytes("")), "")
 	check("Missing", roundTrip(com_missing()), -2147352572)
+	check("VT_ERROR unsigned code", roundTrip(com_variant(VT_ERROR, 2148139465)), -2146827831)
+	check("VT_ERROR signed code", roundTrip(com_variant(VT_ERROR, -2146827831)), -2146827831)
+	checkError("VT_ERROR code out of range", "com_variant(VT_ERROR, 5000000000)", "32-bit number")
 	check("Variant list items", roundTrip([com_null(), com_bool(1), com_date("2026-05-06")]), ["", 1, "2026-05-06"])
 	checkError("Bad date", 'com_date("2026-13-01")', "com_variant()")
 	checkError("Bad day (February 30)", 'com_date("2026-02-30")', "com_variant()")
@@ -174,6 +178,9 @@ func testPaths
 	checkError("Missing parenthesis", 'com_get(com_createobject("Scripting.Dictionary"), "Item(")', "Bad member name or path")
 	checkError("Missing quote", 'com_get(com_createobject("Scripting.Dictionary"), "Item(' + "'a)" + '")', "Bad member name or path")
 	checkError("Not an object in the path", 'com_get(com_createobject("Scripting.Dictionary"), "Count.Value")', "not a COM object")
+	checkError("Path ending with a dot", 'com_get(com_createobject("Scripting.Dictionary"), "Count.")', "Bad member name or path")
+	checkError("Path ending with a dot and spaces", 'com_get(com_createobject("Scripting.Dictionary"), "Count. ")', "Bad member name or path")
+	checkError("COM_SET without a value", 'com_dispatch(com_createobject("Scripting.Dictionary"), ' + "'Item(" + '"k")' + "'" + ', COM_SET, [])', "The value is missing")
 	checkError("Bad mode", 'com_dispatch(com_createobject("Scripting.Dictionary"), "Count", 9, [])', "Bad mode")
 
 func testObjects
@@ -437,6 +444,27 @@ func runEventTests oConnection
 	check("COMEvents with the interface name", len(oEvents.names()), 9)
 	oEvents.disconnect()
 	checkError("Unknown events interface", 'com_connectevents(oEventConnection, "NoSuchEvents")', "NoSuchEvents")
+	oByRefEvents = com_connectevents(oConnection)
+	oByRefInEvent = com_byref(0)
+	com_onevent(oByRefEvents, "WillExecute", "com_release(oByRefInEvent)")
+	com_invoke(oConnection, "Execute", "SELECT * FROM T", oByRefInEvent)
+	check("ByRef released during the call", com_isobject(oByRefInEvent), 0)
+	com_disconnectevents(oByRefEvents)
+	oCloseEvents = com_connectevents(oEventConnection)
+	com_onevent(oCloseEvents, "Disconnect", "nZero = 0 x = 1 / nZero")
+	cError = ""
+	oSecond = accessOpenDatabase("unit_events")
+	oSecondEvents = com_connectevents(oSecond)
+	com_onevent(oSecondEvents, "Disconnect", "nZero = 0 x = 1 / nZero")
+	try
+		com_invoke(oSecond, "Close")
+	catch
+		cError = cCatchError
+	done
+	check("Error in the Disconnect event is raised by Close", substr(cError, "Event Disconnect") > 0, 1)
+	check("No pending error after it was raised", com_get(oConnection, "State"), adStateOpen)
+	com_disconnectevents(oCloseEvents)
+	com_disconnectevents(oSecondEvents)
 	oHandlerEvents = com_connectevents(oConnection)
 	com_onevent(oHandlerEvents, "WillExecute", "nZero = 0 x = 1 / nZero")
 	cError = ""

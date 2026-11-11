@@ -276,7 +276,7 @@ The arguments after `cPath` are added after the arguments written in the last me
 | `com_seteventresult(vValue)` | In the handler: the return value of the event (few events use it) |
 | `com_processmessages([nMilliseconds])` | Process the Windows messages (like `DoEvents` in Visual Basic), and wait `nMilliseconds` (default: `0`). Return the number of processed messages |
 
-Events from in-process objects (like ADO) happen while we call their methods. Events from other programs (like Excel) happen while we call their methods, while `com_processmessages()` runs, or in the event loop of a GUI library (like RingQt). The handler runs inside `try/catch`: if it raises an error, the error is raised again by the `com_*()` function that caused the event (`Error, WinCOM: Event <Name> : <Error>`).
+Events from in-process objects (like ADO) happen while we call their methods. Events from other programs (like Excel) happen while we call their methods, while `com_processmessages()` runs, or in the event loop of a GUI library (like RingQt). The handler runs inside `try/catch`: if it raises an error, the error is raised again by the `com_*()` function that caused the event (`Error, WinCOM: Event <Name> : <Error>`). If the event didn't happen during a `com_*()` function (for example in the event loop of RingQt), the error is printed.
 
 ### Objects
 
@@ -302,7 +302,7 @@ Events from in-process objects (like ADO) happen while we call their methods. Ev
 | `com_currency(nValue)` | Currency (four digits after the decimal point) |
 | `com_double(nValue)` | Double (numbers without fractions are passed as Long by default) |
 | `com_bytes(cData)` | Binary data (byte array) from a Ring string |
-| `com_variant(nVarType, vValue)` | Convert the value to the `VARIANT` type `nVarType` (`VT_I2`, `VT_I4`, `VT_R4`, `VT_R8`, `VT_CY`, `VT_DATE`, `VT_BSTR`, `VT_BOOL`, `VT_DECIMAL`, ...). Strings are converted using the invariant locale (the decimal separator is `.`) |
+| `com_variant(nVarType, vValue)` | Convert the value to the `VARIANT` type `nVarType` (`VT_I2`, `VT_I4`, `VT_R4`, `VT_R8`, `VT_CY`, `VT_DATE`, `VT_BSTR`, `VT_BOOL`, `VT_DECIMAL`, ...). Strings are converted using the invariant locale (the decimal separator is `.`). For `VT_ERROR` the value is a 32-bit error code, signed or unsigned (like `com_lasthresult()`) |
 | `com_lasttype()` | Return the `VARIANT` type of the last value returned by `com_get()`, `com_invoke()` or `com_dispatch()` |
 | `com_wasnull()` | Return `1` if the last value was Null |
 | `com_lasthresult()` | Return the `HRESULT` code of the last call (`0` is `S_OK`), as an unsigned number (`upper(hex(com_lasthresult()))` gives `"80040E14"`) |
@@ -412,6 +412,7 @@ Error, WinCOM: NoSuch.Object : Invalid class string (0x800401F3)
 | `Error, WinCOM: <Member> : The value is not a COM object (path: ...)` | A member in the middle of the path doesn't return an object |
 | `Error, WinCOM: Ring objects can't be passed to COM (...)` | A Ring object was passed to a `com_*()` function (pass `oObject.pointer()`, or use the `COMObject` methods) |
 | `Error, WinCOM: Event <Name> : <Error>` | An error in an event handler (raised by the function that caused the event) |
+| `Error, WinCOM: The value is missing` | `com_set()`, `com_setref()` or `com_dispatch()` (`COM_SET`, `COM_SETREF`) without the value after the path |
 | `Error, WinCOM: Named arguments (com_named()) must be after the other arguments` | A named argument is before a positional argument |
 | `Error, WinCOM: There is no active event (...)` | `com_eventargs()`, `com_eventname()`, `com_seteventarg()` or `com_seteventresult()` is used outside an event handler |
 | `Error, WinCOM: The COM technology is available on MS-Windows only` | `load "wincom.ring"` on another platform |
